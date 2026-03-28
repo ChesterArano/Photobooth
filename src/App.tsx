@@ -22,7 +22,22 @@ type PrintLayoutConfig = {
   paper: "4x6-portrait" | "6x4-landscape";
 };
 
-type CameraFilterId = "none" | "bw" | "sepia" | "vivid";
+type CameraFilterId =
+  | "none"
+  | "bw"
+  | "sepia"
+  | "vivid"
+  | "warm"
+  | "cool"
+  | "soft"
+  | "matte"
+  | "fade"
+  | "golden"
+  | "retro"
+  | "mocha"
+  | "blush"
+  | "noir"
+  | "neon";
 
 type CameraFilterConfig = {
   id: CameraFilterId;
@@ -35,6 +50,17 @@ const CAMERA_FILTERS: readonly CameraFilterConfig[] = [
   { id: "bw", label: "B&W", css: "grayscale(1)" },
   { id: "sepia", label: "Sepia", css: "sepia(1)" },
   { id: "vivid", label: "Vivid", css: "contrast(1.15) saturate(1.35)" },
+  { id: "warm", label: "Warm", css: "sepia(0.28) saturate(1.22) contrast(1.06) brightness(1.05) hue-rotate(-8deg)" },
+  { id: "cool", label: "Cool", css: "saturate(1.12) contrast(1.06) brightness(1.03) hue-rotate(10deg)" },
+  { id: "soft", label: "Soft", css: "contrast(0.96) saturate(0.96) brightness(1.08)" },
+  { id: "matte", label: "Matte", css: "contrast(0.90) saturate(0.92) brightness(1.05)" },
+  { id: "fade", label: "Fade", css: "brightness(1.08) contrast(0.86) saturate(0.88)" },
+  { id: "golden", label: "Golden", css: "sepia(0.20) saturate(1.35) brightness(1.08) contrast(1.05) hue-rotate(-12deg)" },
+  { id: "retro", label: "Retro", css: "sepia(0.38) saturate(1.05) contrast(1.10) brightness(1.02) hue-rotate(-6deg)" },
+  { id: "mocha", label: "Mocha", css: "sepia(0.45) saturate(1.05) brightness(1.02) contrast(1.08)" },
+  { id: "blush", label: "Blush", css: "sepia(0.18) saturate(1.35) brightness(1.06) hue-rotate(-20deg)" },
+  { id: "noir", label: "Noir", css: "grayscale(1) contrast(1.18) brightness(0.95)" },
+  { id: "neon", label: "Neon", css: "contrast(1.25) saturate(1.65) brightness(1.02)" },
 ] as const;
 
 type PreviewBorderKind = "solid" | "gradient";
@@ -785,6 +811,13 @@ export default function App() {
   const [flash, setFlash] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
 
+  const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(
+    null
+  );
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorRotate, setEditorRotate] = useState<0 | 90 | 180 | 270>(0);
+  const [editorFlipX, setEditorFlipX] = useState(false);
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
@@ -792,7 +825,8 @@ export default function App() {
     PRINT_LAYOUTS.find((l) => l.id === printLayout) ?? PRINT_LAYOUTS[2];
   const numPhotos = activeLayout.poses;
 
-  const printEnabled = photos.length >= numPhotos && !captureInProgress;
+  const filledPhotos = photos.filter(Boolean).length;
+  const printEnabled = filledPhotos >= numPhotos && !captureInProgress;
 
   const activeCameraFilterCss =
     CAMERA_FILTERS.find((f) => f.id === cameraFilter)?.css ?? "none";
@@ -884,6 +918,7 @@ export default function App() {
 
     setCaptureInProgress(true);
     setPhotos([]);
+    setSelectedPhotoIndex(0);
 
     for (let i = 0; i < numPhotos; i += 1) {
       for (let t = timerSeconds; t >= 1; t -= 1) {
@@ -907,6 +942,35 @@ export default function App() {
     }
 
     setCaptureInProgress(false);
+  }
+
+  async function applySimpleEditToDataUrl(opts: {
+    src: string;
+    rotate: 0 | 90 | 180 | 270;
+    flipX: boolean;
+  }): Promise<string | null> {
+    const { src, rotate, flipX } = opts;
+    if (!src) return null;
+
+    const img = await loadImage(src);
+    if (!img) return null;
+
+    const rotated = rotate === 90 || rotate === 270;
+    const canvas = document.createElement("canvas");
+    canvas.width = rotated ? img.height : img.width;
+    canvas.height = rotated ? img.width : img.height;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    ctx.save();
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate((rotate * Math.PI) / 180);
+    ctx.scale(flipX ? -1 : 1, 1);
+    ctx.drawImage(img, -img.width / 2, -img.height / 2);
+    ctx.restore();
+
+    return canvas.toDataURL("image/png");
   }
 
   function buildPrintHtml() {
@@ -1541,7 +1605,52 @@ export default function App() {
     setCountdown(null);
     setFlash(false);
     setPhotos([]);
+    setSelectedPhotoIndex(null);
+    setEditorOpen(false);
     setView("landing");
+  }
+
+  function handleDeleteSelected() {
+    if (captureInProgress) return;
+    if (selectedPhotoIndex === null) return;
+    setPhotos((prev) => {
+      const next = [...prev];
+      if (selectedPhotoIndex < 0 || selectedPhotoIndex >= next.length) {
+        return prev;
+      }
+      next[selectedPhotoIndex] = "";
+      return next;
+    });
+  }
+
+  async function handleRetakeSelected() {
+    if (captureInProgress) return;
+    if (settingsOpen) return;
+    if (selectedPhotoIndex === null) return;
+    if (selectedPhotoIndex < 0 || selectedPhotoIndex >= numPhotos) return;
+
+    setCaptureInProgress(true);
+
+    for (let t = timerSeconds; t >= 1; t -= 1) {
+      setCountdown(t);
+      await sleep(1000);
+    }
+
+    setCountdown(null);
+    setFlash(true);
+    await sleep(80);
+    setFlash(false);
+
+    const image = await captureFrame();
+    setPhotos((prev) => {
+      const next = [...prev];
+      while (next.length < numPhotos) next.push("");
+      next[selectedPhotoIndex] = image ?? "";
+      return next;
+    });
+
+    await sleep(250);
+    setCaptureInProgress(false);
   }
 
   return (
@@ -1645,6 +1754,83 @@ export default function App() {
                         ) : null}
                       </div>
                     </div>
+
+                    <div className="mt-3 rounded-2xl border border-zinc-200 bg-white/70 p-3">
+                      <div className="text-xs font-semibold uppercase tracking-wider text-zinc-700">
+                        Filter
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        {CAMERA_FILTERS.map((f) => (
+                          <button
+                            key={f.id}
+                            type="button"
+                            disabled={captureInProgress}
+                            onClick={() => setCameraFilter(f.id)}
+                            className={classNames(
+                              "rounded-xl border px-3 py-2 text-sm font-semibold transition",
+                              captureInProgress && "opacity-60",
+                              cameraFilter === f.id
+                                ? "border-fuchsia-500/70 bg-zinc-950 text-white"
+                                : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
+                            )}
+                          >
+                            {f.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {selectedPhotoIndex !== null && photos.length > 0 ? (
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          disabled={captureInProgress || !photos[selectedPhotoIndex]}
+                          onClick={() => {
+                            setEditorRotate(0);
+                            setEditorFlipX(false);
+                            setEditorOpen(true);
+                          }}
+                          className={classNames(
+                            "rounded-xl border px-3 py-2 text-sm font-semibold shadow-sm transition",
+                            captureInProgress || !photos[selectedPhotoIndex]
+                              ? "border-zinc-200 bg-zinc-100 text-zinc-400"
+                              : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
+                          )}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          disabled={captureInProgress}
+                          onClick={() => void handleRetakeSelected()}
+                          className={classNames(
+                            "rounded-xl border px-3 py-2 text-sm font-semibold shadow-sm transition",
+                            captureInProgress
+                              ? "border-zinc-200 bg-zinc-100 text-zinc-400"
+                              : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
+                          )}
+                        >
+                          Retake
+                        </button>
+                        <button
+                          type="button"
+                          disabled={captureInProgress || !photos[selectedPhotoIndex]}
+                          onClick={() => {
+                            if (window.confirm("Delete this shot?")) {
+                              handleDeleteSelected();
+                            }
+                          }}
+                          className={classNames(
+                            "rounded-xl border px-3 py-2 text-sm font-semibold shadow-sm transition",
+                            captureInProgress || !photos[selectedPhotoIndex]
+                              ? "border-zinc-200 bg-zinc-100 text-zinc-400"
+                              : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
+                          )}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -1656,7 +1842,7 @@ export default function App() {
                       Preview
                     </h3>
                     <div className="text-xs font-medium text-zinc-500">
-                      {Math.min(photos.filter(Boolean).length, numPhotos)}/{numPhotos}
+                      {Math.min(filledPhotos, numPhotos)}/{numPhotos}
                     </div>
                   </div>
 
@@ -1677,6 +1863,102 @@ export default function App() {
                           photos={photos}
                           border={previewBorder}
                         />
+                      </div>
+
+                      <div className="mt-4">
+                        <div className="text-xs font-semibold uppercase tracking-wider text-zinc-700">
+                          Shots
+                        </div>
+                        <div className="mt-2 grid grid-cols-4 gap-2">
+                          {Array.from({ length: numPhotos }).map((_, idx) => {
+                            const src = photos[idx] ?? "";
+                            const selected = selectedPhotoIndex === idx;
+                            return (
+                              <button
+                                key={idx}
+                                type="button"
+                                disabled={captureInProgress}
+                                onClick={() => setSelectedPhotoIndex(idx)}
+                                className={classNames(
+                                  "group relative overflow-hidden rounded-xl border bg-white shadow-sm",
+                                  selected
+                                    ? "border-fuchsia-500/70"
+                                    : "border-zinc-200 hover:border-zinc-300",
+                                  captureInProgress && "opacity-60"
+                                )}
+                                style={{ aspectRatio: "1 / 1" }}
+                                aria-label={`Select shot ${idx + 1}`}
+                              >
+                                {src ? (
+                                  <img
+                                    src={src}
+                                    alt=""
+                                    className="h-full w-full object-cover"
+                                  />
+                                ) : (
+                                  <div className="grid h-full w-full place-items-center text-xs font-semibold text-zinc-500">
+                                    Empty
+                                  </div>
+                                )}
+                                <div className="absolute left-1 top-1 rounded-md bg-black/55 px-1.5 py-0.5 text-[11px] font-bold text-white">
+                                  {idx + 1}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {selectedPhotoIndex !== null ? (
+                          <div className="mt-3 grid grid-cols-3 gap-2">
+                            <button
+                              type="button"
+                              disabled={captureInProgress || !photos[selectedPhotoIndex]}
+                              onClick={() => {
+                                setEditorRotate(0);
+                                setEditorFlipX(false);
+                                setEditorOpen(true);
+                              }}
+                              className={classNames(
+                                "rounded-xl border px-3 py-2 text-sm font-semibold shadow-sm transition",
+                                captureInProgress || !photos[selectedPhotoIndex]
+                                  ? "border-zinc-200 bg-zinc-100 text-zinc-400"
+                                  : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
+                              )}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              disabled={captureInProgress}
+                              onClick={() => void handleRetakeSelected()}
+                              className={classNames(
+                                "rounded-xl border px-3 py-2 text-sm font-semibold shadow-sm transition",
+                                captureInProgress
+                                  ? "border-zinc-200 bg-zinc-100 text-zinc-400"
+                                  : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
+                              )}
+                            >
+                              Retake
+                            </button>
+                            <button
+                              type="button"
+                              disabled={captureInProgress || !photos[selectedPhotoIndex]}
+                              onClick={() => {
+                                if (window.confirm("Delete this shot?")) {
+                                  handleDeleteSelected();
+                                }
+                              }}
+                              className={classNames(
+                                "rounded-xl border px-3 py-2 text-sm font-semibold shadow-sm transition",
+                                captureInProgress || !photos[selectedPhotoIndex]
+                                  ? "border-zinc-200 bg-zinc-100 text-zinc-400"
+                                  : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
+                              )}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -1779,6 +2061,7 @@ export default function App() {
                       <div className="text-center text-sm font-semibold">
                         Camera
                       </div>
+
                       <div className="mt-3 flex items-center justify-center">
                         <button
                           type="button"
@@ -1791,29 +2074,6 @@ export default function App() {
                         >
                           ⇅&nbsp; Flip Back
                         </button>
-                      </div>
-
-                      <div>
-                        <div className="text-center text-sm font-semibold">
-                          Camera Filter
-                        </div>
-                        <div className="mt-3 grid grid-cols-2 gap-3">
-                          {CAMERA_FILTERS.map((f) => (
-                            <button
-                              key={f.id}
-                              type="button"
-                              onClick={() => setCameraFilter(f.id)}
-                              className={classNames(
-                                "rounded-xl border px-3 py-2 text-sm font-semibold",
-                                cameraFilter === f.id
-                                  ? "border-fuchsia-500/70 bg-zinc-950 text-white"
-                                  : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
-                              )}
-                            >
-                              {f.label}
-                            </button>
-                          ))}
-                        </div>
                       </div>
 
                       <div>
@@ -2233,6 +2493,135 @@ export default function App() {
                       Continue
                     </button>
                   </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {editorOpen ? (
+            <div
+              className="fixed inset-0 z-50 bg-black/55 px-4 py-6"
+              role="dialog"
+              aria-modal="true"
+            >
+              <div className="mx-auto flex h-full max-h-[calc(100vh-3rem)] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-2xl">
+                <div className="sticky top-0 z-10 bg-white/95 px-6 py-5 backdrop-blur md:px-8">
+                  <div className="relative flex items-center justify-center">
+                    <h2 className="text-center text-2xl font-bold">Edit Shot</h2>
+                    <button
+                      type="button"
+                      aria-label="Exit"
+                      onClick={() => setEditorOpen(false)}
+                      className="absolute right-0 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-full border border-zinc-200 bg-white text-zinc-700 shadow-sm transition hover:bg-zinc-50 active:translate-y-[calc(-50%+1px)]"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto px-6 pb-6 pt-4 md:px-8 md:pb-8">
+                  {selectedPhotoIndex === null || !photos[selectedPhotoIndex] ? (
+                    <div className="grid place-items-center rounded-2xl border border-zinc-200 bg-zinc-50 p-8 text-center">
+                      <div>
+                        <div className="text-lg font-semibold text-zinc-900">
+                          No image selected
+                        </div>
+                        <div className="mt-2 text-sm text-zinc-600">
+                          Select a shot that has a photo.
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-5">
+                      <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-black">
+                        <img
+                          src={photos[selectedPhotoIndex]}
+                          alt=""
+                          className="h-full w-full object-contain"
+                          style={{
+                            aspectRatio: "4 / 3",
+                            transform: `rotate(${editorRotate}deg) ${editorFlipX ? "scaleX(-1)" : ""}`,
+                            transformOrigin: "center",
+                          }}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditorRotate((r) =>
+                              r === 0 ? 270 : ((r - 90) as 0 | 90 | 180 | 270)
+                            )
+                          }
+                          className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 shadow-sm transition hover:bg-zinc-50"
+                        >
+                          Rotate Left
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditorRotate((r) =>
+                              r === 270 ? 0 : ((r + 90) as 0 | 90 | 180 | 270)
+                            )
+                          }
+                          className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 shadow-sm transition hover:bg-zinc-50"
+                        >
+                          Rotate Right
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditorFlipX((v) => !v)}
+                          className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 shadow-sm transition hover:bg-zinc-50"
+                        >
+                          Flip
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditorRotate(0);
+                            setEditorFlipX(false);
+                          }}
+                          className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 shadow-sm transition hover:bg-zinc-50"
+                        >
+                          Reset
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setEditorOpen(false)}
+                          className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-900 shadow-sm transition hover:bg-zinc-50"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (selectedPhotoIndex === null) return;
+                            const src = photos[selectedPhotoIndex];
+                            if (!src) return;
+                            const next = await applySimpleEditToDataUrl({
+                              src,
+                              rotate: editorRotate,
+                              flipX: editorFlipX,
+                            });
+                            if (!next) return;
+                            setPhotos((prev) => {
+                              const copy = [...prev];
+                              copy[selectedPhotoIndex] = next;
+                              return copy;
+                            });
+                            setEditorOpen(false);
+                          }}
+                          className="rounded-xl bg-zinc-950 px-3 py-2 text-sm font-semibold text-white shadow-lg transition hover:bg-zinc-900 active:translate-y-px"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
